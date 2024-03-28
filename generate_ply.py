@@ -54,10 +54,43 @@ if __name__ == "__main__":
     # retrieve useful values from scene:
     imgs = scene.imgs
     focals = scene.get_focals()
-    poses = scene.get_im_poses()
     pts3d = scene.get_pts3d()
+    depths = scene.get_depthmaps(raw=True)
+    confidence_masks = scene.get_masks()
 
     import numpy as np
+
+    def to_depth_map(depth, img, mask):
+        def to_numpy(x):
+            return x.detach().cpu().numpy()
+
+        depth = to_numpy(depth).reshape(img.shape[0], img.shape[1])
+        mask = to_numpy(mask)
+
+        print(np.max(depth), np.min(depth))
+        max_depth = np.max(depth)
+        min_depth = np.min(depth)
+        depth = (depth - min_depth) / (max_depth - min_depth)
+        cv2.imshow("depth", depth)
+        cv2.waitKey()
+
+        for p, m in zip(depth, mask):
+            p[m] = 0
+
+        return depth
+
+    for i in range(len(depths)):
+        import cv2
+
+        depth_map = to_depth_map(depths[i], imgs[i], confidence_masks[i])
+        print("Data type:", depth_map.dtype)
+        np_img = imgs[i]
+
+        # cv2.imshow("depth", depth_map)
+        cv2.imshow("img", np_img)
+        cv2.waitKey()
+
+    exit(0)
 
     def to_pcl(pts3d, color, mask):
         def to_numpy(x):
@@ -75,6 +108,8 @@ if __name__ == "__main__":
 
         pts3d = to_numpy(pts3d)
         mask = to_numpy(mask)
+        print(f"pts3d.shape {pts3d.shape}")
+        print(f"mask.shape {mask.shape}")
         if mask is None:
             mask = [slice(None)] * len(pts3d)
 
@@ -87,19 +122,20 @@ if __name__ == "__main__":
         # print(f"col.shape {col.shape}")
         return pts.reshape(-1, 3), clamp_0_1(col.reshape(-1, 3))
 
-    confidence_masks = scene.get_masks()
-
     pcl_list = []
     col_list = []
     for i in range(len(pts3d)):
         pcl, col = to_pcl(pts3d[i], imgs[i], confidence_masks[i])
+        # import cv2
+        # cv2.imshow("col", imgs[i])
+        # cv2.waitKey(0)
         pcl_list.append(pcl)
         col_list.append(col)
     pcl = np.concatenate(pcl_list)
     col = np.concatenate(col_list)
 
     print(pcl.shape)
-    print(col.shape)
+    # print(col.shape)
     # print(col[::1000, :])
 
     import open3d as o3d
@@ -111,65 +147,4 @@ if __name__ == "__main__":
     o3d.visualization.draw_geometries([pcd])
 
     o3d.io.write_point_cloud("/home/arthurycliu/Documents/dust3r/data_desktop.ply", pcd)
-    # print("dump done")
-
-    # confidence_masks = scene.get_masks()
-
-    # # visualize reconstruction
-    # scene.show()
-
-    # # find 2D-2D matches between the two images
-    # from dust3r.utils.geometry import find_reciprocal_matches, xy_grid
-
-    # pts2d_list, pts3d_list = [], []
-    # for i in range(2):
-    #     conf_i = confidence_masks[i].cpu().numpy()
-    #     pts2d_list.append(
-    #         xy_grid(*imgs[i].shape[:2][::-1])[conf_i]
-    #     )  # imgs[i].shape[:2] = (H, W)
-    #     pts3d_list.append(pts3d[i].detach().cpu().numpy()[conf_i])
-    # reciprocal_in_P2, nn2_in_P1, num_matches = find_reciprocal_matches(*pts3d_list)
-    # print(f"found {num_matches} matches")
-    # matches_im1 = pts2d_list[1][reciprocal_in_P2]
-    # matches_im0 = pts2d_list[0][nn2_in_P1][reciprocal_in_P2]
-
-    # # visualize a few matches
-    # import numpy as np
-    # from matplotlib import pyplot as pl
-
-    # pcl1, pcl2 = pts3d_list
-    # print(type(pcl1))
-    # print(type(pcl2))
-    # # Dump pcl1 matrix into a txt file
-    # np.savetxt("/home/arthurycliu/Documents/dust3r/pcl1.txt", pcl1)
-    # np.savetxt("/home/arthurycliu/Documents/dust3r/pcl2.txt", pcl2)
-
-    # n_viz = 10
-    # match_idx_to_viz = np.round(np.linspace(0, num_matches - 1, n_viz)).astype(int)
-    # viz_matches_im0, viz_matches_im1 = (
-    #     matches_im0[match_idx_to_viz],
-    #     matches_im1[match_idx_to_viz],
-    # )
-
-    # H0, W0, H1, W1 = *imgs[0].shape[:2], *imgs[1].shape[:2]
-    # img0 = np.pad(
-    #     imgs[0], ((0, max(H1 - H0, 0)), (0, 0), (0, 0)), "constant", constant_values=0
-    # )
-    # img1 = np.pad(
-    #     imgs[1], ((0, max(H0 - H1, 0)), (0, 0), (0, 0)), "constant", constant_values=0
-    # )
-    # img = np.concatenate((img0, img1), axis=1)
-    # pl.figure()
-    # pl.imshow(img)
-    # cmap = pl.get_cmap("jet")
-    # for i in range(n_viz):
-    #     (x0, y0), (x1, y1) = viz_matches_im0[i].T, viz_matches_im1[i].T
-    #     pl.plot(
-    #         [x0, x1 + W0],
-    #         [y0, y1],
-    #         "-+",
-    #         color=cmap(i / (n_viz - 1)),
-    #         scalex=False,
-    #         scaley=False,
-    #     )
-    # pl.show(block=True)
+    print("dump done")

@@ -102,3 +102,46 @@ def load_images(folder_or_list, size, square_ok=False):
     assert imgs, 'no images foud at '+root
     print(f' (Found {len(imgs)} images)')
     return imgs
+
+
+def convert_cv_images(images: list, size, square_ok=False) -> list:
+    """Convert a list of cv2 images to proper input format for DUSt3R"""
+    assert images, "no images provided"
+
+    imgs = []
+    for i, img in enumerate(images):
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        img = PIL.Image.fromarray(img)
+        W1, H1 = img.size
+        if size == 224:
+            # resize short side to 224 (then crop)
+            img = _resize_pil_image(img, round(size * max(W1 / H1, H1 / W1)))
+        else:
+            # resize long side to 512
+            img = _resize_pil_image(img, size)
+        W, H = img.size
+        cx, cy = W // 2, H // 2
+        if size == 224:
+            half = min(cx, cy)
+            img = img.crop((cx - half, cy - half, cx + half, cy + half))
+        else:
+            # halfw, halfh = ((2 * cx) // 16) * 8, ((2 * cy) // 16) * 8
+            halfw, halfh = cx - cx % 8, cy - cy % 8
+            print(f"W={W}, H={H}, cx={cx}, cy={cy}, halfw={halfw}, halfh={halfh}")
+            if not (square_ok) and W == H:
+                halfh = 3 * halfw / 4
+            img = img.crop((cx - halfw, cy - halfh, cx + halfw, cy + halfh))
+
+        W2, H2 = img.size
+        print(f" - converted image from resolution {W1}x{H1} --> {W2}x{H2}")
+        imgs.append(
+            dict(
+                img=ImgNorm(img)[None],
+                true_shape=np.int32([img.size[::-1]]),
+                idx=i,
+                instance=str(i),
+            )
+        )
+
+    print(f" (Found {len(imgs)} images)")
+    return imgs
