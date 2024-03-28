@@ -75,11 +75,12 @@ class EndToEndService(EndToEndServiceServicer):
         )
         output = inference(pairs, self.model, self.device, batch_size=self.batch_size)
         scene = global_aligner(
-            output, device=self.device, mode=GlobalAlignerMode.PointCloudOptimizer
+            output, device=self.device, mode=GlobalAlignerMode.PairViewer
         )
-        _ = scene.compute_global_alignment(
-            init="mst", niter=self.niter, schedule=self.schedule, lr=self.lr
-        )
+        # Not necessary for just one pair
+        # _ = scene.compute_global_alignment(
+        #     init="mst", niter=self.niter, schedule=self.schedule, lr=self.lr
+        # )
 
         # retrieve useful values from scene:
         imgs = scene.imgs
