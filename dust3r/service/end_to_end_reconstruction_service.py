@@ -2,6 +2,7 @@ import cv2
 import grpc
 import numpy as np
 import signal
+from scipy.spatial import transform
 from concurrent import futures
 from common import dust3r_logger
 
@@ -19,6 +20,7 @@ from proto.api.services.ar_session.ar_session_service_pb2_grpc import (
     add_EndToEndServiceServicer_to_server,
 )
 from proto.api.vision.image_pb2 import Image
+from proto.api.math.pose_pb2 import Pose
 
 
 def GetCvImage(image_proto):
@@ -57,8 +59,6 @@ class EndToEndService(EndToEndServiceServicer):
         self.niter = 300
         self.model = load_model(self.model_path, self.device)
 
-        print("I am running. yeah")
-
     def EndToEndReconstruction(
         self, request: EndToEndReconstructionRequest, context
     ) -> EndToEndReconstructionResponse:
@@ -86,6 +86,7 @@ class EndToEndService(EndToEndServiceServicer):
         imgs = scene.imgs
         depths = scene.get_depthmaps(raw=True)
         confidence_masks = scene.get_masks()
+        poses = scene.get_im_poses()
 
         def to_depth_map(depth, img, mask):
             def to_numpy(x):
@@ -108,6 +109,19 @@ class EndToEndService(EndToEndServiceServicer):
             depth_proto.gray_image.column = depth_map.shape[1]
             depth_proto.gray_image.data = depth_map.tobytes()
             response.image_depths.append(depth_proto)
+
+            pose_proto = Pose()
+            pose_proto.translation.x = poses[i][0, 3].item()
+            pose_proto.translation.y = poses[i][1, 3].item()
+            pose_proto.translation.z = poses[i][2, 3].item()
+            quaternion = transform.Rotation.from_matrix(
+                poses[i][:3, :3].cpu().numpy().reshape(3, 3)
+            ).as_quat()
+            pose_proto.rotation.x = quaternion[0]
+            pose_proto.rotation.y = quaternion[1]
+            pose_proto.rotation.z = quaternion[2]
+            pose_proto.rotation.w = quaternion[3]
+            response.poses.append(pose_proto)
 
         return response
 
@@ -164,7 +178,11 @@ class EndToEndService(EndToEndServiceServicer):
 
 if __name__ == "__main__":
     service_addresses = ["localhost:10001"]
-    server = grpc.server(futures.ThreadPoolExecutor(max_workers=5))
+    channel_opt = [
+        ("grpc.max_send_message_length", 512 * 1024 * 1024),
+        ("grpc.max_receive_message_length", 512 * 1024 * 1024),
+    ]
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=5), options=channel_opt)
     servicer = EndToEndService()
     add_EndToEndServiceServicer_to_server(
         servicer,
