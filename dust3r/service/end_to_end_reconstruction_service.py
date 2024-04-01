@@ -10,6 +10,7 @@ from dust3r.inference import inference, load_model
 from dust3r.utils.image import convert_cv_images
 from dust3r.image_pairs import make_pairs
 from dust3r.cloud_opt import global_aligner, GlobalAlignerMode
+from dust3r.service.utils import to_masked_point_map
 
 from proto.api.services.ar_session.ar_session_service_pb2 import (
     EndToEndReconstructionRequest,
@@ -19,7 +20,6 @@ from proto.api.services.ar_session.ar_session_service_pb2_grpc import (
     EndToEndServiceServicer,
     add_EndToEndServiceServicer_to_server,
 )
-from proto.api.vision.image_pb2 import Image
 from proto.api.math.pose_pb2 import Pose
 
 
@@ -77,40 +77,30 @@ class EndToEndService(EndToEndServiceServicer):
         scene = global_aligner(
             output, device=self.device, mode=GlobalAlignerMode.PairViewer
         )
-        # Not necessary for just one pair
+        # # Not necessary for just one pair
         # _ = scene.compute_global_alignment(
         #     init="mst", niter=self.niter, schedule=self.schedule, lr=self.lr
         # )
 
         # retrieve useful values from scene:
-        imgs = scene.imgs
+        pts3d = scene.get_pts3d()
         depths = scene.get_depthmaps(raw=True)
         confidence_masks = scene.get_masks()
         poses = scene.get_im_poses()
 
-        def to_depth_map(depth, img, mask):
-            def to_numpy(x):
-                return x.detach().cpu().numpy()
-
-            depth = to_numpy(depth).reshape(img.shape[0], img.shape[1])
-            mask = to_numpy(mask)
-
-            for p, m in zip(depth, mask):
-                p[~m] = 0
-
-            return depth
-
         response = EndToEndReconstructionResponse()
         for i in range(len(depths)):
-            depth_map = to_depth_map(depths[i], imgs[i], confidence_masks[i])
-            assert depth_map.dtype == np.float32, f"Actual type: {depth_map.dtype}"
-            depth_proto = Image()
-            depth_proto.gray_image.row = depth_map.shape[0]
-            depth_proto.gray_image.column = depth_map.shape[1]
-            depth_proto.gray_image.data = depth_map.tobytes()
-            response.image_depths.append(depth_proto)
+            point_map = to_masked_point_map(pts3d[i], confidence_masks[i])
+
+            assert point_map.dtype == np.float32, f"Actual type: {point_map.dtype}"
+
+            point_map_proto = EndToEndReconstructionResponse.PointMap()
+            point_map_proto.row, point_map_proto.column, _ = point_map.shape
+            point_map_proto.data = point_map.tobytes()
+            response.point_maps.append(point_map_proto)
 
             pose_proto = Pose()
+            print(poses[i])
             pose_proto.translation.x = poses[i][0, 3].item()
             pose_proto.translation.y = poses[i][1, 3].item()
             pose_proto.translation.z = poses[i][2, 3].item()
@@ -124,56 +114,6 @@ class EndToEndService(EndToEndServiceServicer):
             response.poses.append(pose_proto)
 
         return response
-
-        # pts3d = scene.get_pts3d()
-        # def to_pcl(pts3d, color, mask):
-        #     def to_numpy(x):
-        #         return x.detach().cpu().numpy()
-
-        #     def clamp_0_1(colors):
-        #         if not isinstance(colors, np.ndarray):
-        #             colors = colors.astype(float) / 255
-        #         if np.issubdtype(colors.dtype, np.floating):
-        #             pass
-        #         assert (
-        #             0 <= colors.min() and colors.max() <= 1
-        #         ), f"{colors.min()} {colors.max()}"
-        #         return colors
-
-        #     pts3d = to_numpy(pts3d)
-        #     mask = to_numpy(mask)
-        #     if mask is None:
-        #         mask = [slice(None)] * len(pts3d)
-
-        #     pts = np.concatenate([p[m] for p, m in zip(pts3d, mask)])
-        #     col = np.concatenate([p[m] for p, m in zip(color, mask)])
-        #     # for i in range(10):
-        #     #     print(mask[i * 30, i * 30])
-        #     # print(f"color.shape {color.shape}")
-        #     # print(f"pts.shape {pts.shape}")
-        #     # print(f"col.shape {col.shape}")
-        #     return pts.reshape(-1, 3), clamp_0_1(col.reshape(-1, 3))
-
-        # pcl_list = []
-        # col_list = []
-        # for i in range(len(pts3d)):
-        #     pcl, col = to_pcl(pts3d[i], imgs[i], confidence_masks[i])
-        #     pcl_list.append(pcl)
-        #     col_list.append(col)
-        # pcl = np.concatenate(pcl_list)
-        # col = np.concatenate(col_list)
-
-        # print(pcl.shape)
-        # print(col.shape)
-        # # print(col[::1000, :])
-
-        # import open3d as o3d
-
-        # pcd = o3d.geometry.PointCloud()
-        # pcd.points = o3d.utility.Vector3dVector(pcl)
-        # pcd.colors = o3d.utility.Vector3dVector(col)
-
-        # o3d.visualization.draw_geometries([pcd])
 
 
 if __name__ == "__main__":

@@ -43,7 +43,8 @@ def cv_image_to_proto(image: cv2.Mat, format_extension: str = "") -> Image:
 
 if __name__ == "__main__":
     channel = grpc.insecure_channel(
-        "localhost:10001",
+        # "192.168.10.150:7999",
+        "0.0.0.0:10001",
         options=[
             ("grpc.so_reuseport", 1),
             ("grpc.use_local_subchannel_pool", 1),
@@ -51,33 +52,53 @@ if __name__ == "__main__":
     )
     stub = EndToEndServiceStub(channel)
 
-    img = cv2.imread("/home/arthurycliu/Documents/Alpha/Data/image_0.png")
-    img2 = cv2.imread("/home/arthurycliu/Documents/Alpha/Data/image_355.png")
+    imgs = []
+    imgs.append(cv2.imread("/home/arthurycliu/Documents/Alpha/Data/image_0.png"))
+    imgs.append(cv2.imread("/home/arthurycliu/Documents/Alpha/Data/image_355.png"))
 
     request = EndToEndReconstructionRequest()
     request.frames.append(
         ArCameraFrame(
-            image=cv_image_to_proto(img, ".png"),
+            image=cv_image_to_proto(imgs[0], ".png"),
         )
     )
     request.frames.append(
         ArCameraFrame(
-            image=cv_image_to_proto(img2),
+            image=cv_image_to_proto(imgs[1]),
         )
     )
     response = stub.EndToEndReconstruction(request)
-    print(len(response.image_depths))
 
-    for depth_map_proto in response.image_depths:
-        assert depth_map_proto.WhichOneof("image_type") == "gray_image"
+    pcl_list = []
+    col_list = []
+    print(len(response.point_maps))
+    for i, point_map in enumerate(response.point_maps):
+        points = np.frombuffer(point_map.data, dtype=np.float32).reshape(
+            (point_map.row, point_map.column, 3)
+        )
 
-        depth_map = np.frombuffer(
-            depth_map_proto.gray_image.data, dtype=np.float32
-        ).reshape((depth_map_proto.gray_image.row, depth_map_proto.gray_image.column))
+        image_resize = cv2.resize(imgs[i], (points.shape[1], points.shape[0]))
+        image_rgb = cv2.cvtColor(image_resize, cv2.COLOR_BGR2RGB)
 
-        max_depth = np.max(depth_map)
-        min_depth = np.min(depth_map)
-        print(max_depth)
-        print(min_depth)
-        cv2.imshow("depth", (depth_map - min_depth) / (max_depth - min_depth))
-        cv2.waitKey()
+        # Convert the image to float64
+        image_float64 = image_rgb.astype(np.float64) / 255.0
+
+        assert point_map.row == image_float64.shape[0], f"{image_float64.shape}"
+        assert point_map.column == image_float64.shape[1], f"{image_float64.shape}"
+        for pts_row, col_row in zip(points, image_float64):
+            for pts, cols in zip(pts_row, col_row):
+                if np.linalg.norm(pts) == 0:
+                    continue
+                pcl_list.append(pts.reshape(1, 3))
+                col_list.append(cols.reshape(1, 3))
+
+    pcl = np.concatenate(pcl_list)
+    col = np.concatenate(col_list)
+
+    import open3d as o3d
+
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(pcl)
+    pcd.colors = o3d.utility.Vector3dVector(col)
+
+    o3d.visualization.draw_geometries([pcd])
