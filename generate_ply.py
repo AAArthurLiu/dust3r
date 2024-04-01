@@ -2,6 +2,7 @@ from dust3r.inference import inference, load_model
 from dust3r.utils.image import load_images
 from dust3r.image_pairs import make_pairs
 from dust3r.cloud_opt import global_aligner, GlobalAlignerMode
+from dust3r.service.utils import to_pcl_color, to_depth_map, to_masked_point_map
 
 if __name__ == "__main__":
     model_path = "checkpoints/DUSt3R_ViTLarge_BaseDecoder_512_dpt.pth"
@@ -44,99 +45,67 @@ if __name__ == "__main__":
     # depending on your task, you may be fine with the raw output and not need it
     # with only two input images, you could use GlobalAlignerMode.PairViewer: it would just convert the output
     # if using GlobalAlignerMode.PairViewer, no need to run compute_global_alignment
-    scene = global_aligner(
-        output, device=device, mode=GlobalAlignerMode.PointCloudOptimizer
-    )
-    loss = scene.compute_global_alignment(
-        init="mst", niter=niter, schedule=schedule, lr=lr
-    )
+    # scene = global_aligner(
+    #     output, device=device, mode=GlobalAlignerMode.PointCloudOptimizer
+    # )
+    # loss = scene.compute_global_alignment(
+    #     init="mst", niter=niter, schedule=schedule, lr=lr
+    # )
+
+    # compute_global_alignment Not necessary for just one pair
+    scene = global_aligner(output, device=device, mode=GlobalAlignerMode.PairViewer)
 
     # retrieve useful values from scene:
     imgs = scene.imgs
-    focals = scene.get_focals()
     pts3d = scene.get_pts3d()
     depths = scene.get_depthmaps(raw=True)
     confidence_masks = scene.get_masks()
 
     import numpy as np
 
-    def to_depth_map(depth, img, mask):
-        def to_numpy(x):
-            return x.detach().cpu().numpy()
+    # for i in range(len(depths)):
+    #     import cv2
 
-        depth = to_numpy(depth).reshape(img.shape[0], img.shape[1])
-        mask = to_numpy(mask)
+    #     depth_map = to_depth_map(depths[i], imgs[i], confidence_masks[i])
+    #     print("Data type:", depth_map.dtype)
+    #     np_img = imgs[i]
 
-        print(np.max(depth), np.min(depth))
-        max_depth = np.max(depth)
-        min_depth = np.min(depth)
-        depth = (depth - min_depth) / (max_depth - min_depth)
-        cv2.imshow("depth", depth)
-        cv2.waitKey()
+    #     # cv2.imshow("depth", depth_map)
+    #     cv2.imshow("img", np_img)
+    #     cv2.waitKey()
 
-        for p, m in zip(depth, mask):
-            p[m] = 0
+    # exit(0)
 
-        return depth
+    # pcl_list = []
+    # col_list = []
+    # for i in range(len(pts3d)):
+    #     pcl, col = to_pcl_color(pts3d[i], imgs[i], confidence_masks[i])
+    #     # import cv2
+    #     # cv2.imshow("col", imgs[i])
+    #     # cv2.waitKey(0)
+    #     pcl_list.append(pcl)
+    #     col_list.append(col)
+    # pcl = np.concatenate(pcl_list)
+    # col = np.concatenate(col_list)
 
-    for i in range(len(depths)):
-        import cv2
-
-        depth_map = to_depth_map(depths[i], imgs[i], confidence_masks[i])
-        print("Data type:", depth_map.dtype)
-        np_img = imgs[i]
-
-        # cv2.imshow("depth", depth_map)
-        cv2.imshow("img", np_img)
-        cv2.waitKey()
-
-    exit(0)
-
-    def to_pcl(pts3d, color, mask):
-        def to_numpy(x):
-            return x.detach().cpu().numpy()
-
-        def clamp_0_1(colors):
-            if not isinstance(colors, np.ndarray):
-                colors = colors.astype(float) / 255
-            if np.issubdtype(colors.dtype, np.floating):
-                pass
-            assert (
-                0 <= colors.min() and colors.max() <= 1
-            ), f"{colors.min()} {colors.max()}"
-            return colors
-
-        pts3d = to_numpy(pts3d)
-        mask = to_numpy(mask)
-        print(f"pts3d.shape {pts3d.shape}")
-        print(f"mask.shape {mask.shape}")
-        if mask is None:
-            mask = [slice(None)] * len(pts3d)
-
-        pts = np.concatenate([p[m] for p, m in zip(pts3d, mask)])
-        col = np.concatenate([p[m] for p, m in zip(color, mask)])
-        # for i in range(10):
-        #     print(mask[i * 30, i * 30])
-        # print(f"color.shape {color.shape}")
-        # print(f"pts.shape {pts.shape}")
-        # print(f"col.shape {col.shape}")
-        return pts.reshape(-1, 3), clamp_0_1(col.reshape(-1, 3))
+    # print(pcl.shape)
+    # # print(col.shape)
+    # # print(col[::1000, :])
 
     pcl_list = []
     col_list = []
     for i in range(len(pts3d)):
-        pcl, col = to_pcl(pts3d[i], imgs[i], confidence_masks[i])
-        # import cv2
-        # cv2.imshow("col", imgs[i])
-        # cv2.waitKey(0)
-        pcl_list.append(pcl)
-        col_list.append(col)
+        points_map = to_masked_point_map(pts3d[i], confidence_masks[i])
+        assert points_map.shape[0] == imgs[i].shape[0], f"{points_map.shape} != {imgs[i].shape}"
+        assert points_map.shape[1] == imgs[i].shape[1], f"{points_map.shape} != {imgs[i].shape}"
+        for pts_row, col_row in zip(points_map, imgs[i]):
+            for pts, cols in zip(pts_row, col_row):
+                if np.linalg.norm(pts) == 0:
+                    continue
+                pcl_list.append(pts.reshape(1, 3))
+                col_list.append(cols.reshape(1, 3))
     pcl = np.concatenate(pcl_list)
     col = np.concatenate(col_list)
-
-    print(pcl.shape)
-    # print(col.shape)
-    # print(col[::1000, :])
 
     import open3d as o3d
 
